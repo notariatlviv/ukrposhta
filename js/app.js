@@ -5,12 +5,25 @@
  * Використовує fetch API та конфігурацію з js/config.js.
  */
 
-// ─── Константи ────────────────────────────────────────────────────────────────
+// ─── Константи ─────────────────────────────────────────────────────────
 
-/** Базова URL-адреса API (production та sandbox використовують однаковий хост; середовище визначається токенами) */
+/** Базова URL-адреса API */
 const API_BASE_URL = 'https://www.ukrposhta.ua/ecom/0.0.1';
 
-// ─── DOM-елементи ──────────────────────────────────────────────────────────────
+/** 
+ * CORS-проксі для обходу блокування браузерних запитів.
+ * Укрпошта API не підтримує CORS, тому потрібен проксі.
+ * Список резервних проксі на випадок недоступності основного.
+ */
+const CORS_PROXIES = [
+    'https://corsproxy.io/?',
+    'https://api.allorigins.win/raw?url=',
+    'https://cors-anywhere.herokuapp.com/'
+];
+
+let currentProxyIndex = 0;
+
+// ─── DOM-елементи ──────────────────────────────────────────────────────
 
 const spinnerEl      = document.getElementById('spinner');
 const errorEl        = document.getElementById('errorBlock');
@@ -28,16 +41,14 @@ const dateDisplay2El = document.getElementById('dateDisplay2');
 const emptyDateEl    = document.getElementById('emptyDate');
 const updatedAtEl    = document.getElementById('updatedAt');
 
-// ─── Стан сортування ───────────────────────────────────────────────────────────
+// ─── Стан сортування ─────────────────────────────────────────────────────
 
 let sortState = {}; // { colIndex: true|false } — true = за зростанням
 
-// ─── Утиліти ───────────────────────────────────────────────────────────────────
+// ─── Утиліти ──────────────────────────────────────────────────────────
 
 /**
  * Форматує дату в українському форматі (ДД.ММ.РРРР)
- * @param {Date} date
- * @returns {string}
  */
 function formatDateUa(date) {
     const d = String(date.getDate()).padStart(2, '0');
@@ -48,8 +59,6 @@ function formatDateUa(date) {
 
 /**
  * Форматує дату у формат YYYY-MM-DD для API
- * @param {Date} date
- * @returns {string}
  */
 function formatDateIso(date) {
     const d = String(date.getDate()).padStart(2, '0');
@@ -60,8 +69,6 @@ function formatDateIso(date) {
 
 /**
  * Форматує ПІБ отримувача
- * @param {Object} shipment
- * @returns {string}
  */
 function formatRecipientName(shipment) {
     const parts = [
@@ -74,20 +81,16 @@ function formatRecipientName(shipment) {
 
 /**
  * Форматує адресу доставки
- * @param {Object} shipment
- * @returns {string}
  */
 function formatDeliveryAddress(shipment) {
     const parts = [];
 
-    // Населений пункт
     if (shipment.recipientCityName) {
         parts.push(shipment.recipientCityName);
     } else if (shipment.recipientPostcodeCity) {
         parts.push(shipment.recipientPostcodeCity);
     }
 
-    // Вулиця з номером будинку та квартири
     if (shipment.recipientStreetName) {
         let street = shipment.recipientStreetName;
         if (shipment.recipientHouseNumber) street += ', ' + shipment.recipientHouseNumber;
@@ -95,7 +98,6 @@ function formatDeliveryAddress(shipment) {
         parts.push(street);
     }
 
-    // Поштовий індекс
     if (shipment.recipientPostcode) {
         parts.push(shipment.recipientPostcode);
     }
@@ -104,9 +106,7 @@ function formatDeliveryAddress(shipment) {
 }
 
 /**
- * Форматує вагу (зберігається в грамах)
- * @param {Object} shipment
- * @returns {string}
+ * Форматує вагу
  */
 function formatWeight(shipment) {
     const grams = shipment.weight;
@@ -118,9 +118,7 @@ function formatWeight(shipment) {
 }
 
 /**
- * Форматує оголошену вартість (зберігається в копійках)
- * @param {Object} shipment
- * @returns {string}
+ * Форматує оголошену вартість
  */
 function formatDeclaredPrice(shipment) {
     const price = shipment.declaredPrice ?? shipment.postPay ?? null;
@@ -130,16 +128,12 @@ function formatDeclaredPrice(shipment) {
 
 /**
  * Форматує дату створення відправки
- * @param {Object} shipment
- * @returns {string}
  */
 function formatCreatedDate(shipment) {
     const raw = shipment.createTime ?? shipment.creationDate ?? shipment.dateCreated ?? null;
     if (!raw) return '—';
 
     let date;
-
-    // UNIX timestamp (значення < 1e10 — у секундах, >= 1e10 — у мілісекундах)
     if (typeof raw === 'number') {
         date = new Date(raw < 1e10 ? raw * 1000 : raw);
     } else {
@@ -159,8 +153,6 @@ function formatCreatedDate(shipment) {
 
 /**
  * Повертає назву статусу відправки
- * @param {Object} shipment
- * @returns {string}
  */
 function formatStatus(shipment) {
     return shipment.lastStatusName ?? shipment.statusName ?? shipment.status ?? '—';
@@ -168,8 +160,6 @@ function formatStatus(shipment) {
 
 /**
  * Екранує HTML-символи для безпечного виводу
- * @param {string} str
- * @returns {string}
  */
 function escapeHtml(str) {
     return String(str)
@@ -180,21 +170,59 @@ function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
-// ─── API-запити ────────────────────────────────────────────────────────────────
+// ─── API-запити ─────────────────────────────────────────────────────────
+
+/**
+ * Спроба запиту через CORS-проксі.
+ * Якщо один проксі не працює — пробує наступний.
+ */
+async function fetchWithCorsProxy(url, headers) {
+    let lastError = null;
+
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+        const proxyIndex = (currentProxyIndex + i) % CORS_PROXIES.length;
+        const proxy = CORS_PROXIES[proxyIndex];
+        const proxyUrl = proxy + encodeURIComponent(url);
+
+        try {
+            const response = await fetch(proxyUrl, {
+                method: 'GET',
+                headers: {
+                    ...headers,
+                    'x-requested-with': 'XMLHttpRequest'
+                }
+            });
+
+            if (response.ok) {
+                currentProxyIndex = proxyIndex; // запам'ятовуємо працюючий проксі
+                return response;
+            }
+
+            lastError = new Error(`HTTP ${response.status}`);
+        } catch (err) {
+            lastError = err;
+        }
+    }
+
+    // Якщо жоден проксі не спрацював — пробуємо прямий запит
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: headers
+        });
+        return response;
+    } catch (directError) {
+        throw new Error(
+            'Не вдалося підключитися до API Укрпошти. ' +
+            'Всі CORS-проксі недоступні, прямий запит також заблоковано. ' +
+            'Спробуйте пізніше або зверніться до підтримки. ' +
+            'Остання помилка: ' + (lastError ? lastError.message : directError.message)
+        );
+    }
+}
 
 /**
  * Отримує відправки за вказану дату з eCom API Укрпошти.
- *
- * CORS-примітка: Укрпошта API може блокувати запити безпосередньо з браузера
- * (заголовок Access-Control-Allow-Origin відсутній або обмежений).
- * Якщо виникає CORS-помилка, можливі рішення:
- *   1. Використати серверний проксі (Cloudflare Worker, Netlify Function тощо).
- *   2. Використати публічний CORS-проксі для розробки (не рекомендовано для production).
- *
- * @param {string} date — дата у форматі YYYY-MM-DD
- * @param {number} [page=0] — номер сторінки
- * @param {number} [size=100] — кількість записів
- * @returns {Promise<Array>}
  */
 async function fetchShipments(date, page = 0, size = 100) {
     // Перевірка наявності конфігурації
@@ -205,7 +233,6 @@ async function fetchShipments(date, page = 0, size = 100) {
         );
     }
 
-    const baseUrl  = API_BASE_URL;
     const dateFrom = `${date}T00:00:00`;
     const dateTo   = `${date}T23:59:59`;
 
@@ -217,30 +244,19 @@ async function fetchShipments(date, page = 0, size = 100) {
         size
     });
 
-    const url = `${baseUrl}/shipments?${params}`;
+    const url = `${API_BASE_URL}/shipments?${params}`;
+
+    const headers = {
+        'Authorization':      `Bearer ${CONFIG.BEARER_ECOM}`,
+        'counterparty-token': CONFIG.COUNTERPARTY_TOKEN,
+        'Accept':             'application/json'
+    };
 
     let response;
     try {
-        response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization':      `Bearer ${CONFIG.BEARER_ECOM}`,
-                'counterparty-token': CONFIG.COUNTERPARTY_TOKEN,
-                'Accept':             'application/json'
-            }
-        });
+        response = await fetchWithCorsProxy(url, headers);
     } catch (networkError) {
-        // Мережева помилка (може включати CORS-блокування, відсутність з'єднання тощо).
-        // Примітка: JavaScript не дозволяє надійно відрізнити CORS-помилку від інших мережевих помилок —
-        // обидва типи проявляються як TypeError з мінімальними деталями.
-        throw new Error(
-            'Помилка мережевого доступу до API Укрпошти. ' +
-            'Можливі причини: відсутнє з\'єднання з інтернетом, ' +
-            'CORS-блокування (API не дозволяє прямі запити з браузера), ' +
-            'або API тимчасово недоступне. ' +
-            'Для вирішення CORS: налаштуйте серверний проксі або використайте CORS Anywhere для тестування. ' +
-            'Деталі: ' + networkError.message
-        );
+        throw new Error(networkError.message);
     }
 
     if (!response.ok) {
@@ -249,14 +265,13 @@ async function fetchShipments(date, page = 0, size = 100) {
             const errData = await response.json();
             errMsg += ': ' + (errData.message || errData.error || JSON.stringify(errData));
         } catch (_) {
-            // Не вдалося розпарсити відповідь — залишаємо HTTP-код
+            // Не вдалося розпарсити відповідь
         }
         throw new Error('Помилка API: ' + errMsg);
     }
 
     const data = await response.json();
 
-    // Відповідь може бути { content: [...] } або масивом
     if (data && Array.isArray(data.content)) {
         return data.content;
     }
@@ -267,13 +282,10 @@ async function fetchShipments(date, page = 0, size = 100) {
     return [];
 }
 
-// ─── Рендеринг ─────────────────────────────────────────────────────────────────
+// ─── Рендеринг ────────────────────────────────────────────────────────
 
 /**
  * Відображає рядок таблиці для однієї відправки
- * @param {Object} shipment
- * @param {number} index — порядковий номер (з 1)
- * @returns {string} HTML-рядок
  */
 function renderRow(shipment, index) {
     const barcode = escapeHtml(
@@ -302,7 +314,6 @@ function renderRow(shipment, index) {
 
 /**
  * Показує або приховує спінер завантаження
- * @param {boolean} show
  */
 function setLoading(show) {
     spinnerEl.classList.toggle('d-none', !show);
@@ -310,14 +321,13 @@ function setLoading(show) {
 
 /**
  * Показує блок помилки
- * @param {string} message
  */
 function showError(message) {
     errorMessageEl.textContent = message;
     errorEl.classList.remove('d-none');
 }
 
-/** Приховує всі стани (помилка, порожній стан, таблиця) */
+/** Приховує всі стани */
 function resetState() {
     errorEl.classList.add('d-none');
     emptyEl.classList.add('d-none');
@@ -325,18 +335,16 @@ function resetState() {
     if (totalBadgeEl) totalBadgeEl.classList.add('d-none');
 }
 
-// ─── Сортування ────────────────────────────────────────────────────────────────
+// ─── Сортування ───────────────────────────────────────────────────────
 
 /**
  * Сортує таблицю за вибраним стовпцем
- * @param {number} colIndex — індекс стовпця (з 0)
  */
 function sortTable(colIndex) {
     const table = document.getElementById('shipmentsTable');
     const tbody = table.querySelector('tbody');
     const rows  = Array.from(tbody.querySelectorAll('tr'));
 
-    // Визначаємо напрямок сортування (toggle)
     const asc = sortState[colIndex] !== true;
     sortState  = {};
     sortState[colIndex] = asc;
@@ -345,9 +353,8 @@ function sortTable(colIndex) {
         const aText = a.cells[colIndex] ? a.cells[colIndex].textContent.trim() : '';
         const bText = b.cells[colIndex] ? b.cells[colIndex].textContent.trim() : '';
 
-        // Числове порівняння
-        const aNum = parseFloat(aText.replace(/[^\d.]/g, ''));
-        const bNum = parseFloat(bText.replace(/[^\d.]/g, ''));
+        const aNum = parseFloat(aText.replace(/[^ .]/g, ''));
+        const bNum = parseFloat(bText.replace(/[^ .]/g, ''));
 
         if (!isNaN(aNum) && !isNaN(bNum)) {
             return asc ? aNum - bNum : bNum - aNum;
@@ -358,7 +365,6 @@ function sortTable(colIndex) {
             : bText.localeCompare(aText, 'uk');
     });
 
-    // Оновлюємо іконки сортування в заголовку
     table.querySelectorAll('thead th .sort-icon').forEach((icon, idx) => {
         if (idx === colIndex) {
             icon.className = 'bi sort-icon ' + (asc ? 'bi-sort-down text-white' : 'bi-sort-up text-white');
@@ -367,19 +373,16 @@ function sortTable(colIndex) {
         }
     });
 
-    // Рендеримо відсортовані рядки
     rows.forEach(row => tbody.appendChild(row));
 
-    // Перенумеровуємо після сортування
     tbody.querySelectorAll('tr').forEach((row, i) => {
         if (row.cells[0]) row.cells[0].textContent = i + 1;
     });
 }
 
-// Робимо функцію sortTable глобальною (викликається з onclick в HTML)
 window.sortTable = sortTable;
 
-// ─── Пошук ─────────────────────────────────────────────────────────────────────
+// ─── Пошук ─────────────────────────────────────────────────────────────
 
 /** Фільтрує рядки таблиці за текстом пошуку */
 function applySearch() {
@@ -396,7 +399,7 @@ function applySearch() {
     if (rowCountEl) rowCountEl.textContent = visible;
 }
 
-// ─── Головна функція завантаження ──────────────────────────────────────────────
+// ─── Головна функція завантаження ────────────────────────────────────────
 
 /**
  * Завантажує та відображає відправки за сьогодні
@@ -406,7 +409,6 @@ async function loadShipments() {
     const dateIso = formatDateIso(today);
     const dateUa  = formatDateUa(today);
 
-    // Оновлюємо дату в усіх елементах заголовку одразу
     if (dateDisplayEl)  dateDisplayEl.textContent  = dateUa;
     if (dateDisplay2El) dateDisplay2El.textContent = dateUa;
     if (emptyDateEl)    emptyDateEl.textContent    = dateUa;
@@ -414,7 +416,6 @@ async function loadShipments() {
     resetState();
     setLoading(true);
 
-    // Блокуємо кнопку оновлення
     if (refreshBtnEl) {
         refreshBtnEl.disabled = true;
         refreshBtnEl.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Завантаження...';
@@ -424,34 +425,29 @@ async function loadShipments() {
         const shipments = await fetchShipments(dateIso);
 
         if (shipments.length === 0) {
-            // Немає відправок за сьогодні
             emptyEl.classList.remove('d-none');
         } else {
-            // Рендеримо рядки таблиці
             tbodyEl.innerHTML = shipments
                 .map((s, i) => renderRow(s, i + 1))
                 .join('');
 
-            // Оновлюємо лічильники та показуємо бейдж
             if (rowCountEl)   rowCountEl.textContent   = shipments.length;
             if (totalCountEl) totalCountEl.textContent = shipments.length;
             if (totalBadgeEl) totalBadgeEl.classList.remove('d-none');
 
             tableWrapEl.classList.remove('d-none');
-            sortState = {}; // скидаємо стан сортування
+            sortState = {};
         }
     } catch (err) {
         showError(err.message);
     } finally {
         setLoading(false);
 
-        // Відновлюємо кнопку оновлення
         if (refreshBtnEl) {
             refreshBtnEl.disabled = false;
             refreshBtnEl.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Оновити';
         }
 
-        // Оновлюємо час останнього оновлення
         if (updatedAtEl) {
             const now = new Date();
             const h   = String(now.getHours()).padStart(2, '0');
@@ -462,17 +458,14 @@ async function loadShipments() {
     }
 }
 
-// ─── Ініціалізація ─────────────────────────────────────────────────────────────
+// ─── Ініціалізація ─────────────────────────────────────────────────────
 
-// Підписка на подію пошуку
 if (searchInputEl) {
     searchInputEl.addEventListener('input', applySearch);
 }
 
-// Кнопка оновлення
 if (refreshBtnEl) {
     refreshBtnEl.addEventListener('click', loadShipments);
 }
 
-// Завантажуємо дані при старті сторінки
 loadShipments();
