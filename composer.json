@@ -1,0 +1,17 @@
+{
+    "name": "notariatlviv/ukrposhta",
+    "description": "Сторінка відправок Укрпошти за сьогодні",
+    "type": "project",
+    "require": {
+        "php": ">=7.4",
+        "vlucas/phpdotenv": "^5.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}
