@@ -1,0 +1,26 @@
+/**
+ * config.js.example — Шаблон конфігурації для роботи з API Укрпошти
+ *
+ * Скопіюйте цей файл як js/config.js та замініть плейсхолдери реальними ключами.
+ * ВАЖЛИВО: файл js/config.js не потрапляє в репозиторій (додано до .gitignore).
+ */
+
+const CONFIG = {
+    // Bearer-токен eCom API (для відправок)
+    BEARER_ECOM: 'your_bearer_token_here',
+
+    // Bearer-токен StatusTracking API (для відстеження статусів)
+    BEARER_STATUS: 'your_status_tracking_token_here',
+
+    // Токен контрагента
+    COUNTERPARTY_TOKEN: 'your_counterparty_token_here',
+
+    // UUID контрагента
+    COUNTERPARTY_UUID: 'your_counterparty_uuid_here',
+
+    // Поштовий індекс відправника
+    SENDER_POSTCODE: 'your_postcode_here',
+
+    // Середовище: 'production' або 'sandbox'
+    ENV: 'production'
+};

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Відправки Укрпошти за сьогодні</title>
+
+    <!-- Bootstrap 5 CDN -->
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+        integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
+        crossorigin="anonymous"
+    >
+
+    <!-- Bootstrap Icons -->
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    >
+
+    <!-- Власні стилі -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ─── Навігаційна панель ───────────────────────────────────────────────────── -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-danger shadow-sm">
+    <div class="container">
+        <a class="navbar-brand fw-bold" href="#">
+            <i class="bi bi-box-seam me-2"></i>
+            <span class="logo-text">Укрпошта</span>
+        </a>
+        <span class="navbar-text text-white-50">
+            <i class="bi bi-calendar3 me-1"></i>
+            <span id="dateDisplay">—</span>
+        </span>
+    </div>
+</nav>
+
+<!-- ─── Основний контент ─────────────────────────────────────────────────────── -->
+<div class="container my-4">
+
+    <!-- Заголовок -->
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3 gap-2">
+        <div>
+            <h1 class="h3 mb-0 fw-bold">
+                <i class="bi bi-truck me-2 text-danger"></i>Відправки Укрпошти за сьогодні
+            </h1>
+            <p class="text-muted mb-0 mt-1">
+                <i class="bi bi-calendar-check me-1"></i>
+                <span id="dateDisplay2"></span>
+            </p>
+        </div>
+
+        <!-- Лічильник відправок (прихований до завантаження) -->
+        <span class="badge bg-danger count-badge d-none" id="totalBadge">
+            <i class="bi bi-box me-1"></i>
+            <span id="totalCount">0</span> відправок
+        </span>
+    </div>
+
+    <!-- ─── Спінер завантаження ──────────────────────────────────────────────── -->
+    <div id="spinner" class="text-center py-5">
+        <div class="spinner-border text-danger" role="status" style="width: 3rem; height: 3rem;">
+            <span class="visually-hidden">Завантаження...</span>
+        </div>
+        <p class="mt-3 text-muted">Завантаження відправок...</p>
+    </div>
+
+    <!-- ─── Блок помилки ─────────────────────────────────────────────────────── -->
+    <div id="errorBlock" class="d-none">
+        <div class="alert alert-danger d-flex align-items-start gap-2" role="alert">
+            <i class="bi bi-exclamation-triangle-fill fs-5 flex-shrink-0 mt-1"></i>
+            <div>
+                <strong>Помилка підключення до API:</strong><br>
+                <span id="errorMessage"></span>
+            </div>
+        </div>
+
+        <!-- Підказка для CORS/налаштування -->
+        <div class="alert alert-warning" role="alert">
+            <i class="bi bi-lightbulb me-2"></i>
+            <strong>Підказка:</strong>
+            <ul class="mb-0 mt-1">
+                <li>Переконайтеся, що файл <code>js/config.js</code> існує та заповнений коректними ключами API.</li>
+                <li>
+                    Якщо помилка пов'язана з <strong>CORS</strong> — API Укрпошти може блокувати прямі запити
+                    з браузера. Зверніться до документації або налаштуйте серверний проксі.
+                </li>
+                <li>Для тестування CORS можна тимчасово використати розширення браузера
+                    <em>CORS Unblock</em> або проксі-сервіс.</li>
+            </ul>
+        </div>
+
+        <!-- Кнопка повтору -->
+        <div class="text-center mt-3">
+            <button class="btn btn-danger" id="retryBtn" onclick="loadShipments()">
+                <i class="bi bi-arrow-clockwise me-1"></i>Спробувати знову
+            </button>
+        </div>
+    </div>
+
+    <!-- ─── Порожній стан ────────────────────────────────────────────────────── -->
+    <div id="emptyBlock" class="d-none">
+        <div class="table-container text-center py-5">
+            <i class="bi bi-inbox display-1 text-muted"></i>
+            <h4 class="mt-3 text-muted">Відправок за сьогодні немає</h4>
+            <p class="text-muted">
+                Жодної відправки не знайдено за <span id="emptyDate"></span>
+            </p>
+            <button class="btn btn-outline-danger mt-2" onclick="loadShipments()">
+                <i class="bi bi-arrow-clockwise me-1"></i>Оновити
+            </button>
+        </div>
+    </div>
+
+    <!-- ─── Таблиця відправок ────────────────────────────────────────────────── -->
+    <div id="tableWrapper" class="d-none">
+        <div class="table-container">
+
+            <!-- Панель пошуку та кнопки -->
+            <div class="row g-2 mb-3">
+                <div class="col-md-6">
+                    <div class="input-group">
+                        <span class="input-group-text bg-white">
+                            <i class="bi bi-search text-muted"></i>
+                        </span>
+                        <input
+                            type="text"
+                            id="searchInput"
+                            class="form-control"
+                            placeholder="Пошук за номером, отримувачем, адресою..."
+                        >
+                    </div>
+                </div>
+                <div class="col-md-3 ms-auto">
+                    <button id="refreshBtn" class="btn btn-outline-secondary w-100">
+                        <i class="bi bi-arrow-clockwise me-1"></i>Оновити
+                    </button>
+                </div>
+            </div>
+
+            <!-- Таблиця -->
+            <div class="table-responsive">
+                <table class="table table-hover table-bordered align-middle mb-0" id="shipmentsTable">
+                    <thead class="table-dark">
+                        <tr>
+                            <th onclick="sortTable(0)" title="Сортувати">
+                                # <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(1)" title="Сортувати">
+                                <i class="bi bi-upc-scan me-1"></i>Номер відправки
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(2)" title="Сортувати">
+                                <i class="bi bi-person me-1"></i>Отримувач
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(3)" title="Сортувати">
+                                <i class="bi bi-geo-alt me-1"></i>Адреса доставки
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(4)" title="Сортувати">
+                                <i class="bi bi-speedometer me-1"></i>Вага
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(5)" title="Сортувати">
+                                <i class="bi bi-info-circle me-1"></i>Статус
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(6)" title="Сортувати">
+                                <i class="bi bi-calendar me-1"></i>Дата створення
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                            <th onclick="sortTable(7)" title="Сортувати">
+                                <i class="bi bi-currency-exchange me-1"></i>Оголошена вартість
+                                <i class="bi bi-arrow-down-up sort-icon"></i>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="shipmentsBody">
+                        <!-- Рядки заповнюються динамічно через app.js -->
+                    </tbody>
+                </table>
+            </div><!-- /.table-responsive -->
+
+            <!-- Підсумок -->
+            <div class="mt-3 text-muted small">
+                Відображено: <strong id="rowCount">0</strong> відправок
+            </div>
+
+        </div><!-- /.table-container -->
+    </div><!-- /#tableWrapper -->
+
+</div><!-- /.container -->
+
+<!-- ─── Нижній колонтитул ────────────────────────────────────────────────────── -->
+<footer class="text-center text-muted py-3 mt-auto border-top bg-white">
+    <small>
+        <i class="bi bi-clock me-1"></i>Оновлено: <span id="updatedAt">—</span>
+        &nbsp;|&nbsp;
+        <a href="https://www.ukrposhta.ua" target="_blank" rel="noopener" class="text-muted">
+            ukrposhta.ua
+        </a>
+    </small>
+</footer>
+
+<!-- Bootstrap 5 JS -->
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
+    crossorigin="anonymous"
+></script>
+
+<!--
+    Конфігурація API: створіть файл js/config.js на основі js/config.js.example
+    та заповніть реальними ключами API Укрпошти.
+    УВАГА: не додавайте js/config.js до git-репозиторію (він у .gitignore).
+-->
+<script src="js/config.js"></script>
+
+<!-- Логіка застосунку -->
+<script src="js/app.js"></script>
+
+</body>
+</html>
